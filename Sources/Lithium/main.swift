@@ -32,7 +32,7 @@ var imageHeight = 270
 
 let device = MTLCreateSystemDefaultDevice()!
 let library = try! device.makeDefaultLibrary(bundle: Bundle.module)
-let primaryRayFunc = library.makeFunction(name: "primary_ray")!
+let primaryRayFunc = library.makeFunction(name: "ray_trace")!
 let pipeline = try! device.makeComputePipelineState(function: primaryRayFunc)
 
 var pixelData: [Float4] = (0..<(imageWidth * imageHeight)).map{ _ in Float4(0, 0, 0, 0)}

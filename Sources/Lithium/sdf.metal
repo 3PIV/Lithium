@@ -1,0 +1,54 @@
+#include <metal_stdlib>
+#include "sdf_header.metal"
+
+using namespace metal;
+
+// MARK: Normal Estimation
+float3 sdfNormalEstimate(float (*sdfFunc)(const float3), const float3 p) {
+  float epsilon = 0.01;
+  float3 estimate = float3(
+                           sdfFunc(float3(p.x + epsilon, p.y, p.z)) - sdfFunc(float3(p.x - epsilon, p.y, p.z)),
+                           sdfFunc(float3(p.x, p.y + epsilon, p.z)) - sdfFunc(float3(p.x, p.y - epsilon, p.z)),
+                           sdfFunc(float3(p.x, p.y, p.z  + epsilon)) - sdfFunc(float3(p.x, p.y, p.z - epsilon))
+                           );
+  return normalize(estimate);
+}
+
+// MARK: Sphere Definitions
+SdfSphere::SdfSphere(const thread float3 &origin, float radius): o(origin), r(radius){};
+
+float SdfSphere::distance(const float3 p) {
+  return length(p - o) - r;
+}
+
+float3 SdfSphere::normal(const thread float3 &h) {
+  return normalize(h - o);
+}
+
+// MARK: CSG Definitions
+float sdfUnion(float d1, float d2) {
+  return min(d1, d2);
+}
+
+float sdfSubtraction(float d1, float d2) {
+  return max(-d1, d2);
+}
+
+float sdfIntersection(float d1, float d2) {
+  return max(d1, d2);
+}
+
+float sdfSmoothUnion( float d1, float d2, float k ) {
+  float h = clamp(0.5 + 0.5 * (d2 - d1) / k, 0.0, 1.0);
+  return mix(d2, d1, h) - k * h * (1.0 - h);
+}
+
+float sdfSmoothSubtraction( float d1, float d2, float k ) {
+  float h = clamp(0.5 - 0.5 * (d2 + d1) / k, 0.0, 1.0);
+  return mix(d2, -d1, h) + k * h * (1.0 - h);
+}
+
+float sdfSmoothIntersection( float d1, float d2, float k ) {
+  float h = clamp(0.5 - 0.5 * (d2 - d1) / k, 0.0, 1.0);
+  return mix(d2, d1, h) + k * h * (1.0 - h);
+}
