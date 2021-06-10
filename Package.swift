@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
   name: "Lithium",
   platforms: [
-    .macOS(.v10_15)
+    .macOS(.v11)
   ],
   dependencies: [
     // Dependencies declare other packages that this package depends on.

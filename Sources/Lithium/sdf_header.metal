@@ -24,6 +24,30 @@ public:
   float r;
 };
 
+class SdfBox {
+  
+public:
+  SdfBox(const thread float3 &c, const thread float3 &b);
+  
+  float distance(const float3 p);
+  
+public:
+  float3 c;
+  float3 b;
+};
+
+class SdfTorus {
+  
+public:
+  SdfTorus(const thread float3 &c, const thread float2 &d);
+  
+  float distance(const float3 p);
+  
+public:
+  float3 c;
+  float2 d;
+};
+
 
 float sdfUnion(float d1, float d2);
 

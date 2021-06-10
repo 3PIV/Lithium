@@ -25,6 +25,21 @@ float3 SdfSphere::normal(const thread float3 &h) {
   return normalize(h - o);
 }
 
+SdfBox::SdfBox(const thread float3 &center, const thread float3 &bounds): c(center), b(bounds) {};
+  
+float SdfBox::distance(const float3 p) {
+  float3 q = abs(p - c) - b;
+  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+SdfTorus::SdfTorus(const thread float3 &center, const thread float2 &dimensions): c(center), d(dimensions) {};
+  
+float SdfTorus::distance(const float3 p) {
+  float3 diff = p - c;
+  float2 q = float2(length(diff.xz) - d.x, diff.y);
+  return length(q) - d.y;
+}
+
 // MARK: CSG Definitions
 float sdfUnion(float d1, float d2) {
   return min(d1, d2);
