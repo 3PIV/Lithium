@@ -20,9 +20,15 @@ public:
   float3 d;
 };
 
+struct Material {
+  float3 a;
+  float3 (*scatter)(const float3 p, const float3 n, thread float &s);
+};
+
 struct HitRecord {
   float3 p;
   float3 n;
+  Material m;
   bool h;
 };
 
@@ -30,6 +36,7 @@ float sceneDistance(const float3 p) {
   SdfBox b(float3(-0.05, 0, -1), float3(0.25));
   SdfTorus t(float3(-0.1, 0, -1), float2(0.4, 0.2));
   SdfTorus t2(float3(-0.1, 0, -1), float2(1.0, 0.2));
+  SdfTorus t3(float3(-2, 1, -3), float2(0.5, 0.2));
   SdfSphere s2(float3(1, 0, -1), 0.7);
   SdfSphere s3(float3(-2, 1, -3), 0.5);
   SdfSphere s4(float3(0.5, 0, -1), 0.4);
@@ -39,6 +46,7 @@ float sceneDistance(const float3 p) {
   const auto bd = b.distance(p);
   const auto td = t.distance(p);
   const auto t2d = t2.distance(p);
+  const auto t3d = t3.distance(p);
   const auto s2d = s2.distance(p);
   const auto s3d = s3.distance(p);
   const auto s4d = s4.distance(p);
@@ -48,7 +56,74 @@ float sceneDistance(const float3 p) {
   auto glob = sdfSmoothSubtraction(td, sdfSmoothUnion(bd, s2d, 0.5), 0.1);
   glob = sdfSmoothSubtraction(t2d, sdfSmoothSubtraction(s4d, glob, 0.1), 0.1);
   
-  return sdfUnion(s5d, sdfUnion(sdfUnion(glob, gd), s3d));
+  return sdfUnion(s5d, sdfUnion(sdfUnion(glob, gd), sdfSmoothSubtraction(t3d, s3d, 0.1)));
+}
+
+inline float3 random_f3_in_unit_sphere(thread float &seed) {
+  const float x = rand(seed) * 2.0 - 1.0;
+  const float y = rand(seed) * 2.0 - 1.0;
+  const float z = rand(seed) * 2.0 - 1.0;
+  float3 p = float3(x, y, z);
+  return normalize(p);
+}
+
+float3 lambertianScatter(float3 d, float3 n, thread float& s) {
+  return n + random_f3_in_unit_sphere(s);
+}
+
+float3 reflectScatter(float3 d, float3 n, thread float& s) {
+  return reflect(d, n);
+}
+
+float3 fuzzScatter(float3 d, float3 n, thread float& s) {
+  return reflect(d, n) + (0.5 * random_f3_in_unit_sphere(s));
+}
+
+Material sceneMaterial(const float3 p){
+  Material mat = {float3(0.5, 0.5, 0.8), lambertianScatter};
+  
+  SdfBox b(float3(-0.05, 0, -1), float3(0.25));
+  SdfTorus t(float3(-0.1, 0, -1), float2(0.4, 0.2));
+  SdfTorus t2(float3(-0.1, 0, -1), float2(1.0, 0.2));
+  SdfTorus t3(float3(-2, 1, -3), float2(0.5, 0.2));
+  SdfSphere s2(float3(1, 0, -1), 0.7);
+  SdfSphere s3(float3(-2, 1, -3), 0.5);
+  SdfSphere s4(float3(0.5, 0, -1), 0.4);
+  SdfSphere s5(float3(0.5, 0, -1), 0.39);
+  SdfSphere g(float3(0, -200.5, -1), 200.0);
+  
+  const auto bd = b.distance(p);
+  const auto td = t.distance(p);
+  const auto t2d = t2.distance(p);
+  const auto t3d = t3.distance(p);
+  const auto s2d = s2.distance(p);
+  const auto s3d = s3.distance(p);
+  const auto s4d = s4.distance(p);
+  const auto s5d = s5.distance(p);
+  const auto gd = g.distance(p);
+  
+  auto glob = sdfSmoothSubtraction(td, sdfSmoothUnion(bd, s2d, 0.5), 0.1);
+  glob = sdfSmoothSubtraction(t2d, sdfSmoothSubtraction(s4d, glob, 0.1), 0.1);
+  
+  auto moon = sdfSmoothSubtraction(t3d, s3d, 0.1);
+  
+  float3 a = 0.0;
+  float mv = sdfUnion(s5d, sdfUnion(sdfUnion(glob, gd), moon));
+  
+  if (mv == s5d) {
+    a = float3(1.0, 0.4, 0.4);
+    mat.scatter = reflectScatter;
+  } else if (mv == gd) {
+    a = float3(0.4, 1.0, 0.4);
+  } else if (mv == glob) {
+    a = float3(0.4, 0.4, 0.8);
+  } else if (mv == moon) {
+    a = float3(0.6, 0.6, 0.6);
+    mat.scatter = reflectScatter;
+  }
+  mat.a = a;
+  
+  return mat;
 }
 
 void testForHit(float (*sdfFunc)(const float3), thread const Ray& r, thread HitRecord& hr) {
@@ -62,6 +137,7 @@ void testForHit(float (*sdfFunc)(const float3), thread const Ray& r, thread HitR
       hr.h = true;
       hr.p = r.o + r.d * t;
       hr.n = sdfNormalEstimate(sceneDistance, r.o + r.d * t);
+      hr.m = sceneMaterial(hr.p);
       return;
     }
     t += d * 0.75;
@@ -73,14 +149,6 @@ float3 default_atmosphere_color(const thread Ray &r) {
   float3 white = float3(1.0, 1.0, 1.0);
   float3 atmos = float3(0.5, 0.7, 1.0);
   return mix(white, atmos, 0.5 * r.d.y + 1.0);
-}
-
-inline float3 random_f3_in_unit_sphere(thread float &seed) {
-  const float x = rand(seed) * 2.0 - 1.0;
-  const float y = rand(seed) * 2.0 - 1.0;
-  const float z = rand(seed) * 2.0 - 1.0;
-  float3 p = float3(x, y, z);
-  return normalize(p);
 }
 
 //MARK: Ray Spawner
@@ -134,16 +202,16 @@ kernel void ray_trace(device float3 *directions [[ buffer(0) ]],
   Ray r(rayOrigin, rayDirection);
   float3 color = float3(0.0);
 
-  HitRecord hr = {0.0, 0.0, false};
-  float attenuation = 1.0;
+  HitRecord hr = {0.0, 0.0, {float3(0.5, 0.5, 0.8), lambertianScatter}, false};
+  float3 attenuation = 1.0;
   float seed = getSeed(index, pixelIndex, pixelIndex % imageWidth);
   
   for (uint bounceIndex = 0; bounceIndex < rayBounces; ++bounceIndex) {
     testForHit(sceneDistance, r, hr);
     if (hr.h) {
-      float3 target = hr.p + hr.n + random_f3_in_unit_sphere(seed);
-      attenuation *= 0.5;
-      r = Ray(hr.p, target - hr.p);
+      float3 target = hr.m.scatter(r.d, hr.n, seed);
+      attenuation *= hr.m.a;
+      r = Ray(hr.p + target * 0.0001, target);
     } else {
       color = default_atmosphere_color(r) * attenuation;
       break;
