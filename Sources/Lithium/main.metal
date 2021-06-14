@@ -39,11 +39,12 @@ float sceneDistance(const float3 p) {
   SdfTorus t(float3(-0.1, 0, -1), float2(0.4, 0.2));
   SdfTorus t2(float3(-0.1, 0, -1), float2(1.0, 0.2));
   SdfTorus t3(float3(-2, 1, -3), float2(0.5, 0.2));
-  SdfSphere s2(float3(1, 0, -1), 0.7);
+  SdfSphere s2(float3(0.5, 0, -1), 0.4);
   SdfSphere s3(float3(-2, 1, -3), 0.5);
   SdfSphere s4(float3(0.5, 0, -1), 0.4);
   SdfSphere s5(float3(0.5, 0, -1), 0.39);
   SdfSphere s6(float3(0.0, 0.0, -5), 2.13);
+  SdfSphere s7(float3(-.4, -0.2, -0.65), 0.13);
   SdfSphere g(float3(0, -200.5, -1), 200.0);
   
   const auto bd = b.distance(p);
@@ -55,12 +56,13 @@ float sceneDistance(const float3 p) {
   const auto s4d = s4.distance(p);
   const auto s5d = s5.distance(p);
   const auto s6d = s6.distance(p);
+  const auto s7d = s7.distance(p);
   const auto gd = g.distance(p);
   
   auto glob = sdfSmoothSubtraction(td, sdfSmoothUnion(bd, s2d, 0.5), 0.1);
-  glob = sdfSmoothSubtraction(t2d, sdfSmoothSubtraction(s4d, glob, 0.1), 0.1);
+  glob = sdfSubtraction(gd, sdfSmoothSubtraction(t2d, sdfSmoothSubtraction(s4d, glob, 0.1), 0.1));
   
-  return sdfUnion(s6d, sdfUnion(s5d, sdfUnion(sdfUnion(glob, gd), sdfSmoothSubtraction(t3d, s3d, 0.1))));
+  return sdfUnion(s7d, sdfUnion(s6d, sdfUnion(s5d, sdfUnion(sdfUnion(glob, gd), sdfSmoothSubtraction(t3d, s3d, 0.1)))));
 }
 
 inline float3 random_f3_in_unit_sphere(thread float &seed) {
@@ -71,27 +73,24 @@ inline float3 random_f3_in_unit_sphere(thread float &seed) {
   return normalize(p);
 }
 
+float3 myRefract(thread const float3& uv, thread const float3& n, float etai_over_etat) {
+    auto cos_theta = fmin(dot(-uv, n), 1.0);
+    float3 r_out_perp =  etai_over_etat * (uv + cos_theta*n);
+    float3 r_out_parallel = -sqrt(fabs(1.0 - length_squared(r_out_perp))) * n;
+    return r_out_perp + r_out_parallel;
+}
+
 float3 scatter(thread const Material &m, thread const float3 &d, thread const float3 &n, thread float &s) {
-  float3 direction = mix(n, reflect(d,n), m.r);
+  float3 direction = m.r > 0.0 ? reflect(d, n) : n;
   bool ff = dot(d, n) < 0.0;
-  float  dr = 1.0 / m.ir;
-  float3 rfct = refract(normalize(d), normalize(n), dr);
+  float  dr = ff ? 1.0 / m.ir : m.ir;
+  float3 nd = ff ? normalize(n) : -normalize(n);
+  float3 rfct = refract(normalize(d), nd, dr);
   
-  float3 sd = mix(direction, rfct, m.ir > 0.0) + m.f * random_f3_in_unit_sphere(s);
-  length(sd) < 0.8 ? sd = n : sd = sd;
-  return normalize(sd);
-}
-
-float3 lambertianScatter(float3 d, float3 n, thread float& s) {
-  return n + random_f3_in_unit_sphere(s);
-}
-
-float3 reflectScatter(float3 d, float3 n, thread float& s) {
-  return reflect(d, n);
-}
-
-float3 fuzzScatter(float3 d, float3 n, thread float& s) {
-  return reflect(d, n) + (0.5 * random_f3_in_unit_sphere(s));
+  float3 sd = m.ir > 0.0 ? rfct : direction;
+  sd += m.f * random_f3_in_unit_sphere(s);
+  length(sd) < 0.005 ? sd = nd : sd = sd;
+  return sd;
 }
 
 Material sceneMaterial(const float3 p){
@@ -101,11 +100,12 @@ Material sceneMaterial(const float3 p){
   SdfTorus t(float3(-0.1, 0, -1), float2(0.4, 0.2));
   SdfTorus t2(float3(-0.1, 0, -1), float2(1.0, 0.2));
   SdfTorus t3(float3(-2, 1, -3), float2(0.5, 0.2));
-  SdfSphere s2(float3(1, 0, -1), 0.7);
+  SdfSphere s2(float3(0.5, 0, -1), 0.4);
   SdfSphere s3(float3(-2, 1, -3), 0.5);
   SdfSphere s4(float3(0.5, 0, -1), 0.4);
   SdfSphere s5(float3(0.5, 0, -1), 0.39);
   SdfSphere s6(float3(0.0, 0.0, -5), 2.13);
+  SdfSphere s7(float3(-.4, -0.2, -0.65), 0.13);
   SdfSphere g(float3(0, -200.5, -1), 200.0);
   
   const auto bd = b.distance(p);
@@ -117,37 +117,40 @@ Material sceneMaterial(const float3 p){
   const auto s4d = s4.distance(p);
   const auto s5d = s5.distance(p);
   const auto s6d = s6.distance(p);
+  const auto s7d = s7.distance(p);
   const auto gd = g.distance(p);
   
   auto glob = sdfSmoothSubtraction(td, sdfSmoothUnion(bd, s2d, 0.5), 0.1);
-  glob = sdfSmoothSubtraction(t2d, sdfSmoothSubtraction(s4d, glob, 0.1), 0.1);
+  glob = sdfSubtraction(gd, sdfSmoothSubtraction(t2d, sdfSmoothSubtraction(s4d, glob, 0.1), 0.1));
   
   auto moon = sdfSmoothSubtraction(t3d, s3d, 0.1);
   
   float3 a = 0.0;
-  float r = 0.0;
+  float r = -1.0;
   float f = 1.0;
   float ir = -1.0;
-  float mv = sdfUnion(sdfUnion(s5d, sdfUnion(sdfUnion(glob, gd), moon)), s6d);
+  float mv = sdfUnion(s7d, sdfUnion(sdfUnion(s5d, sdfUnion(sdfUnion(glob, gd), moon)), s6d));
   
   if (mv == s5d) {
     a = float3(1.0, 0.4, 0.4);
     r = 1.0;
     f = 0.0;
   } else if (mv == gd) {
-    a = float3(0.4, 1.0, 0.4);
+    a = float3(0.1, 0.9, 0.1);
   } else if (mv == glob) {
     a = float3(1.0, 1.0, 1.0);
-    f = 0.0;
+    f = 0.3;
     ir = 1.5;
   } else if (mv == moon) {
     a = float3(0.6, 0.6, 0.6);
     r = 1.0;
     f = 0.0;
   } else if (mv == s6d) {
-    a = float3(0.6, 0.0, 0.6);
-    r = 0.0;
-    f = 1.0;
+    a = float3(0.6, 0.1, 0.6);
+  } else if (mv == s7d) {
+    a = float3(1.0, 0.8, 0.9);
+    f = 0.0;
+    ir = 1.5;
   }
   
   mat.a = a;
@@ -168,11 +171,11 @@ void testForHit(float (*sdfFunc)(const float3), thread const Ray& r, thread HitR
     if (abs(d) < 0.001 * (0.125 + t)) {
       hr.h = true;
       hr.p = r.o + r.d * t;
-      hr.n = sdfNormalEstimate(sceneDistance, r.o + r.d * t, r.d);
+      hr.n = sdfNormalEstimate(sdfFunc, r.o + r.d * t, r.d);
       hr.m = sceneMaterial(hr.p);
       return;
     }
-    t += d * 0.75;
+    t += abs(d) * 0.75;
     if (t > 1000.0) return;
   }
 }
@@ -180,7 +183,7 @@ void testForHit(float (*sdfFunc)(const float3), thread const Ray& r, thread HitR
 float3 default_atmosphere_color(const thread Ray &r) {
   float3 white = float3(1.0, 1.0, 1.0);
   float3 atmos = float3(0.5, 0.7, 1.0);
-  return mix(white, atmos, 0.5 * r.d.y + 1.0);
+  return mix(white, atmos, 0.5 * saturate(r.d.y) + 1.0);
 }
 
 //MARK: Ray Spawner
@@ -243,7 +246,7 @@ kernel void ray_trace(device float3 *directions [[ buffer(0) ]],
     if (hr.h) {
       float3 target = scatter(hr.m, r.d, hr.n, seed);
       attenuation *= hr.m.a;
-      r = Ray(hr.p + target * 0.0001, target);
+      r = Ray(hr.p + target * 0.001, target);
     } else {
       color = default_atmosphere_color(r) * attenuation;
       break;

@@ -5,14 +5,14 @@ using namespace metal;
 
 // MARK: Normal Estimation
 float3 sdfNormalEstimate(float (*sdfFunc)(const float3), const float3 p, const float3 d) {
-  float epsilon = 0.01;
+  float epsilon = 0.001;
   float3 estimate = float3(
                            sdfFunc(float3(p.x + epsilon, p.y, p.z)) - sdfFunc(float3(p.x - epsilon, p.y, p.z)),
                            sdfFunc(float3(p.x, p.y + epsilon, p.z)) - sdfFunc(float3(p.x, p.y - epsilon, p.z)),
                            sdfFunc(float3(p.x, p.y, p.z  + epsilon)) - sdfFunc(float3(p.x, p.y, p.z - epsilon))
                            );
-  bool inside = sdfFunc(p + 0.01 * d) < sdfFunc(p - 0.01 * d);
-  return inside ? normalize(estimate) : -normalize(estimate);
+  bool inside = sdfFunc(p + epsilon * normalize(estimate)) < 0.0;
+  return inside ? -normalize(estimate) : normalize(estimate);
 }
 
 // MARK: Sphere Definitions
