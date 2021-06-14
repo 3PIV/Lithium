@@ -6,7 +6,7 @@ using namespace metal;
 
 using namespace metal;
 
-float3 sdfNormalEstimate(float (*sdfFunc)(const float3), const float3 p);
+float3 sdfNormalEstimate(float (*sdfFunc)(const float3), const float3 p, const float3 d);
 
 //MARK: Sphere Class Definition
 class SdfSphere {
