@@ -73,19 +73,25 @@ inline float3 random_f3_in_unit_sphere(thread float &seed) {
   return normalize(p);
 }
 
-float3 myRefract(thread const float3& uv, thread const float3& n, float etai_over_etat) {
-    auto cos_theta = fmin(dot(-uv, n), 1.0);
-    float3 r_out_perp =  etai_over_etat * (uv + cos_theta*n);
-    float3 r_out_parallel = -sqrt(fabs(1.0 - length_squared(r_out_perp))) * n;
-    return r_out_perp + r_out_parallel;
+float shlickApprox(float cosine, float dr) {
+  auto r0 = (1.0 - dr) / (1.0 + dr);
+  r0 *= r0;
+  return r0 + (1.0 - r0) * pow((1.0 - cosine), 5.0);
 }
 
 float3 scatter(thread const Material &m, thread const float3 &d, thread const float3 &n, thread float &s) {
-  float3 direction = m.r > 0.0 ? reflect(d, n) : n;
+  float3 rd = reflect(d, n);
+  float3 direction = m.r > 0.0 ? rd : n;
+  
   bool ff = dot(d, n) < 0.0;
   float  dr = ff ? 1.0 / m.ir : m.ir;
   float3 nd = ff ? normalize(n) : -normalize(n);
-  float3 rfct = refract(normalize(d), nd, dr);
+  float3 ud = normalize(d);
+  float cos_theta = fmin(dot(-ud, nd), 1.0);
+  float sin_theta = sqrt(1.0 - pow(cos_theta, 2));
+  bool will_reflect = shlickApprox(cos_theta, dr) > rand(s);
+  bool can_refract = !(dr * sin_theta > 1.0);
+  float3 rfct = can_refract && !will_reflect ? refract(ud, nd, dr) : rd;
   
   float3 sd = m.ir > 0.0 ? rfct : direction;
   sd += m.f * random_f3_in_unit_sphere(s);
@@ -139,7 +145,7 @@ Material sceneMaterial(const float3 p){
     a = float3(0.1, 0.9, 0.1);
   } else if (mv == glob) {
     a = float3(1.0, 1.0, 1.0);
-    f = 0.3;
+    f = 0.0;
     ir = 1.5;
   } else if (mv == moon) {
     a = float3(0.6, 0.6, 0.6);
@@ -168,7 +174,7 @@ void testForHit(float (*sdfFunc)(const float3), thread const Ray& r, thread HitR
   for (int i = 0; i < 1000; ++i) {
     d = sdfFunc(r.o + r.d * t);
     
-    if (abs(d) < 0.001 * (0.125 + t)) {
+    if (abs(d) < 0.0001 * (1.0 + t)) {
       hr.h = true;
       hr.p = r.o + r.d * t;
       hr.n = sdfNormalEstimate(sdfFunc, r.o + r.d * t, r.d);

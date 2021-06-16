@@ -28,10 +28,10 @@ struct SimpleFileWriter {
   }
 }
 
-var imageWidth = 480
-var imageHeight = 270
+var imageWidth = 960
+var imageHeight = 540
 var pixelCount = UInt(imageWidth * imageHeight)
-var sampleCount = 150
+var sampleCount = 50
 var bounceCount = 150
 var cameraOrigin = Float3(repeating: 0.0)
 
