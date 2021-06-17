@@ -32,8 +32,12 @@ var imageWidth = 960
 var imageHeight = 540
 var pixelCount = UInt(imageWidth * imageHeight)
 var sampleCount = 50
-var bounceCount = 150
-var cameraOrigin = Float3(repeating: 0.0)
+var bounceCount = 30
+var cameraOrigin = Float3(-1.0, -0.25, 2.0)
+var cameraTarget = Float3(-0.1, 0, -1.0)
+var fieldOfViewDegrees: Float = 40.0
+var cameraFocusDistance: Float = length(cameraOrigin - cameraTarget)
+var cameraApertureRadius: Float = 0.25
 
 // MARK: Setup Device and Library
 let device = MTLCreateSystemDefaultDevice()!
@@ -59,6 +63,13 @@ let commandEncoder = commandBuffer.makeComputeCommandEncoder()!
  Setup the ray directions. For pixel, there are sampleCount samples.
  Each sample will have a slightly different direction.
  */
+var originData: [Float3] = (0..<(Int(pixelCount) * sampleCount)).map{ _ in Float3(0, 0, 0)}
+var originCount = UInt(originData.count)
+
+let originDataBuffer = device.makeBuffer(bytes: &originData, length: Int(originCount) * MemoryLayout<Float3>.stride, options: [])!
+let originDataMirrorPointer = originDataBuffer.contents().bindMemory(to: Float3.self, capacity: Int(originCount))
+let originDataMirrorBuffer = UnsafeBufferPointer(start: originDataMirrorPointer, count: Int(originCount))
+
 var directionData: [Float3] = (0..<(Int(pixelCount) * sampleCount)).map{ _ in Float3(0, 0, 0)}
 var directionCount = UInt(directionData.count)
 
@@ -68,10 +79,15 @@ let directionDataMirrorBuffer = UnsafeBufferPointer(start: directionDataMirrorPo
 
 commandEncoder.setComputePipelineState(spawnPipeline)
 commandEncoder.setBytes(&cameraOrigin, length: MemoryLayout<Float3>.stride, index: 0)
-commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 1)
-commandEncoder.setBytes(&imageWidth, length: MemoryLayout<Int>.stride, index: 2)
-commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 3)
-commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 4)
+commandEncoder.setBytes(&cameraTarget, length: MemoryLayout<Float3>.stride, index: 1)
+commandEncoder.setBytes(&fieldOfViewDegrees, length: MemoryLayout<Float>.stride, index: 2)
+commandEncoder.setBytes(&cameraFocusDistance, length: MemoryLayout<Float>.stride, index: 3)
+commandEncoder.setBytes(&cameraApertureRadius, length: MemoryLayout<Float>.stride, index: 4)
+commandEncoder.setBuffer(originDataBuffer, offset: 0, index: 5)
+commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 6)
+commandEncoder.setBytes(&imageWidth, length: MemoryLayout<Int>.stride, index: 7)
+commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 8)
+commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 9)
 
 // We have to calculate the sum `pixelCount` times
 // => amount of threadgroups is `resultsCount` / `threadExecutionWidth` (rounded up)
@@ -85,8 +101,8 @@ var threadsPerThreadgroup = MTLSize(width: threadExecutionWidth, height: 1, dept
 commandEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
 
 commandEncoder.setComputePipelineState(tracePipeline)
-commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 0)
-commandEncoder.setBytes(&cameraOrigin, length: MemoryLayout<Float3>.stride, index: 1)
+commandEncoder.setBuffer(originDataBuffer, offset: 0, index: 0)
+commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 1)
 commandEncoder.setBytes(&imageWidth, length: MemoryLayout<Int>.stride, index: 2)
 commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 3)
 commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 4)

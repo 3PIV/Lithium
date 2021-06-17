@@ -38,9 +38,9 @@ float sceneDistance(const float3 p) {
   SdfBox b(float3(-0.05, 0, -1), float3(0.25));
   SdfTorus t(float3(-0.1, 0, -1), float2(0.4, 0.2));
   SdfTorus t2(float3(-0.1, 0, -1), float2(1.0, 0.2));
-  SdfTorus t3(float3(-2, 1, -3), float2(0.5, 0.2));
+  SdfTorus t3(float3(2.5, 1, -3), float2(0.5, 0.2));
   SdfSphere s2(float3(0.5, 0, -1), 0.4);
-  SdfSphere s3(float3(-2, 1, -3), 0.5);
+  SdfSphere s3(float3(2.5, 1, -3), 0.5);
   SdfSphere s4(float3(0.5, 0, -1), 0.4);
   SdfSphere s5(float3(0.5, 0, -1), 0.39);
   SdfSphere s6(float3(0.0, 0.0, -5), 2.13);
@@ -96,7 +96,7 @@ float3 scatter(thread const Material &m, thread const float3 &d, thread const fl
   float3 sd = m.ir > 0.0 ? rfct : direction;
   sd += m.f * random_f3_in_unit_sphere(s);
   length(sd) < 0.005 ? sd = nd : sd = sd;
-  return sd;
+  return normalize(sd);
 }
 
 Material sceneMaterial(const float3 p){
@@ -105,14 +105,14 @@ Material sceneMaterial(const float3 p){
   SdfBox b(float3(-0.05, 0, -1), float3(0.25));
   SdfTorus t(float3(-0.1, 0, -1), float2(0.4, 0.2));
   SdfTorus t2(float3(-0.1, 0, -1), float2(1.0, 0.2));
-  SdfTorus t3(float3(-2, 1, -3), float2(0.5, 0.2));
+  SdfTorus t3(float3(2, 1, -3), float2(0.5, 0.2));
   SdfSphere s2(float3(0.5, 0, -1), 0.4);
-  SdfSphere s3(float3(-2, 1, -3), 0.5);
+  SdfSphere s3(float3(2, 1, -3), 0.5);
   SdfSphere s4(float3(0.5, 0, -1), 0.4);
   SdfSphere s5(float3(0.5, 0, -1), 0.39);
   SdfSphere s6(float3(0.0, 0.0, -5), 2.13);
   SdfSphere s7(float3(-.4, -0.2, -0.65), 0.13);
-  SdfSphere g(float3(0, -200.5, -1), 200.0);
+  SdfSphere g(float3(0, -1000.5, -1), 1000.0);
   
   const auto bd = b.distance(p);
   const auto td = t.distance(p);
@@ -144,17 +144,17 @@ Material sceneMaterial(const float3 p){
   } else if (mv == gd) {
     a = float3(0.1, 0.9, 0.1);
   } else if (mv == glob) {
-    a = float3(1.0, 1.0, 1.0);
-    f = 0.0;
-    ir = 1.5;
+    a = float3(0.3, 0.4, 0.9);
+    r = 1.0;
+    f = 0.5;
   } else if (mv == moon) {
     a = float3(0.6, 0.6, 0.6);
-    r = 1.0;
-    f = 0.0;
+    r = 0.0;
+    f = 1.0;
   } else if (mv == s6d) {
     a = float3(0.6, 0.1, 0.6);
   } else if (mv == s7d) {
-    a = float3(1.0, 0.8, 0.9);
+    a = float3(0.9, 0.8, 0.9);
     f = 0.0;
     ir = 1.5;
   }
@@ -194,10 +194,15 @@ float3 default_atmosphere_color(const thread Ray &r) {
 
 //MARK: Ray Spawner
 kernel void spawn_rays(const device float3 &origin [[ buffer(0) ]],
-                       device float3 *rayDirectionBuffer [[ buffer(1) ]],
-                       const device uint &imageWidth [[ buffer(2) ]],
-                       const device uint &imageHeight [[ buffer(3) ]],
-                       const device uint &samplesPerPixel [[ buffer(4) ]],
+                       const device float3 &target [[ buffer(1) ]],
+                       const device float &fieldOfView [[ buffer(2) ]],
+                       const device float &focusDistance [[ buffer(3) ]],
+                       const device float &apertureRadius [[ buffer(4) ]],
+                       device float3 *rayOriginBuffer [[ buffer(5) ]],
+                       device float3 *rayDirectionBuffer [[ buffer(6) ]],
+                       const device uint &imageWidth [[ buffer(7) ]],
+                       const device uint &imageHeight [[ buffer(8) ]],
+                       const device uint &samplesPerPixel [[ buffer(9) ]],
                        const uint index [[thread_position_in_grid]]){
   if (index >= imageWidth * imageHeight) {
     return;
@@ -206,26 +211,44 @@ kernel void spawn_rays(const device float3 &origin [[ buffer(0) ]],
   const uint row = index / imageWidth;
   const uint col = index % imageWidth;
   
+  const float theta = fieldOfView * (1.0 / 180.0) * 3.1415926535;
+  const float desiredHeight = tan(theta / 2);
+  
   //const float3 origin = float3(0.0);
   const float aspect = float(imageWidth) / float(imageHeight);
-  const float3 vph = float3(0.0, 2.0, 0.0);
-  const float3 vpw = float3(2.0 * aspect, 0.0, 0.0);
-  const float3 llc = float3(-(vph / 2.0) - (vpw / 2.0) - float3(0.0, 0.0, 1.0));
+  const float vph = 2.0 * desiredHeight;
+  const float vpw = aspect * vph;
+  
+  const auto cw = normalize(origin - target);
+  const auto cu = normalize(cross(float3(0.0, 1.0, 0.0), cw));
+  const auto cv = cross(cw, cu);
+  
+  const float3 horizontal = focusDistance * vpw * cu;
+  const float3 vertical = focusDistance * vph * cv;
+  
+  const float3 llc = origin - horizontal / 2.0 - vertical / 2.0 - focusDistance * cw;
+  
+  const float lensRadius = apertureRadius / 2.0;
   
   float seed = getSeed(index, col, row);
   
   for (uint i = 0; i < samplesPerPixel; ++i) {
-    float ranX = fract(rand(seed));
-    float ranY = fract(rand(seed));
-    float u = (float(col) + ranX) / float(imageWidth - 1);
-    float v = 1.0 - (float(row) + ranY) / float(imageHeight - 1);
-    rayDirectionBuffer[(index * samplesPerPixel) + i] = normalize(llc + u * vpw + v * vph - origin);
+    const float2 rd = (fmod(normalize(random_f3_in_unit_sphere(seed).xy), lensRadius) - 0.5 * lensRadius) * 2.0;
+    const float3 amt = lensRadius * float3(rd, 0.0);
+    const float3 offset = cu * amt.x + cv * amt.y;
+    
+    const float ranX = fract(rand(seed));
+    const float ranY = fract(rand(seed));
+    const float u = (float(col) + ranX) / float(imageWidth - 1);
+    const float v = 1.0 - (float(row) + ranY) / float(imageHeight - 1);
+    rayOriginBuffer[(index * samplesPerPixel) + i] = origin + offset;
+    rayDirectionBuffer[(index * samplesPerPixel) + i] = normalize(llc + u * horizontal + v * vertical - origin - offset);
   }
 }
 
 //MARK: Primary Ray Cast Function
-kernel void ray_trace(device float3 *directions [[ buffer(0) ]],
-                      const device float3 &origin [[ buffer(1) ]],
+kernel void ray_trace(device float3 *origins [[ buffer(0) ]],
+                      device float3 *directions [[ buffer(1) ]],
                       const device uint &imageWidth [[ buffer(2) ]],
                       const device uint &imageHeight [[ buffer(3) ]],
                       const device uint &samplesPerPixel [[ buffer(4) ]],
@@ -238,7 +261,7 @@ kernel void ray_trace(device float3 *directions [[ buffer(0) ]],
   const uint pixelIndex = index / 16;
   
   float3 rayDirection = directions[index];
-  float3 rayOrigin = origin;
+  float3 rayOrigin = origins[index];
   
   Ray r(rayOrigin, rayDirection);
   float3 color = float3(0.0);
@@ -258,7 +281,7 @@ kernel void ray_trace(device float3 *directions [[ buffer(0) ]],
       break;
     }
   }
-
+  
   directions[index] = color / samplesPerPixel;
 }
 
