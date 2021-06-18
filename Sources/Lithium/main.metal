@@ -286,11 +286,10 @@ kernel void ray_trace(device float3 *origins [[ buffer(0) ]],
 }
 
 kernel void combine_results(device float3 *intermediateResults [[ buffer(0) ]],
-                            device float4 *results [[ buffer(1) ]],
                             texture2d <float, access::write> resultingImage [[ texture(0) ]],
-                            const device uint &imageWidth [[ buffer(2) ]],
-                            const device uint &imageHeight [[ buffer(3) ]],
-                            const device uint &samplesPerPixel [[ buffer(4) ]],
+                            const device uint &imageWidth [[ buffer(1) ]],
+                            const device uint &imageHeight [[ buffer(2) ]],
+                            const device uint &samplesPerPixel [[ buffer(3) ]],
                             const uint index [[thread_position_in_grid]]){
   if (index >= imageWidth * imageHeight) {
     return;
@@ -305,6 +304,5 @@ kernel void combine_results(device float3 *intermediateResults [[ buffer(0) ]],
     accumulatedColor += intermediateResults[(index * samplesPerPixel) + i];
   }
   
-  results[index] = float4(sqrt(accumulatedColor), 1.0);
-  resultingImage.write(float4(sqrt(accumulatedColor), 1.0), gid);
+  resultingImage.write(float4(accumulatedColor, 1.0), gid);
 }

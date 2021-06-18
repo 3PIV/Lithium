@@ -5,29 +5,6 @@ import simd
 typealias Float4 = SIMD4<Float>
 typealias Float3 = SIMD3<Float>
 
-struct SimpleFileWriter {
-  var fileHandle: FileHandle
-  
-  init(filePath: String, append: Bool = false) {
-    if !FileManager.default.fileExists(atPath: filePath) {
-      FileManager.default.createFile(atPath: filePath, contents: nil, attributes: nil)
-    }
-    
-    fileHandle = FileHandle(forWritingAtPath: filePath)!
-    if !append {
-      fileHandle.truncateFile(atOffset: 0)
-    }
-  }
-  
-  func write(content: String) {
-    fileHandle.seekToEndOfFile()
-    guard let data = content.data(using: String.Encoding.ascii) else {
-      fatalError("Could not write \(content) to file!")
-    }
-    fileHandle.write(data)
-  }
-}
-
 func makeImage(for texture: MTLTexture) -> CGImage? {
   assert(texture.pixelFormat == .rgba8Unorm)
   
@@ -60,10 +37,23 @@ func makeImage(for texture: MTLTexture) -> CGImage? {
   return image
 }
 
+func saveImage(for texture: MTLTexture, where location: String) {
+  guard let accumulatedImage = makeImage(for: texture) else {
+    fatalError("Could not create an image from the specified texture.")
+  }
+  
+  guard let imageDestination = CGImageDestinationCreateWithURL(NSURL.fileURL(withPath: location) as CFURL, kUTTypePNG, 1, nil) else {
+    fatalError("Could not save the image to the provided location: \(location).")
+  }
+  
+  CGImageDestinationAddImage(imageDestination, accumulatedImage, nil)
+  CGImageDestinationFinalize(imageDestination)
+}
+
 var imageWidth = 960
 var imageHeight = 540
 var pixelCount = UInt(imageWidth * imageHeight)
-var sampleCount = 50
+var sampleCount = 75
 var bounceCount = 30
 var cameraOrigin = Float3(-1.0, -0.25, 2.0)
 var cameraTarget = Float3(-0.1, 0, -1.0)
@@ -144,11 +134,6 @@ threadsPerThreadgroup = MTLSize(width: threadExecutionWidth, height: 1, depth: 1
 commandEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
 
 // MARK: Pixel Color Buffer Setup Begin
-var pixelData: [Float4] = (0..<pixelCount).map{ _ in Float4(0, 0, 0, 0)}
-let pixelDataBuffer = device.makeBuffer(bytes: &pixelData, length: Int(pixelCount) * MemoryLayout<Float4>.stride, options: [])!
-let pixelDataMirrorPointer = pixelDataBuffer.contents().bindMemory(to: Float4.self, capacity: Int(pixelCount))
-let pixelDataMirrorBuffer = UnsafeBufferPointer(start: pixelDataMirrorPointer, count: Int(pixelCount))
-
 let accumulantTextureDescriptor = MTLTextureDescriptor()
 accumulantTextureDescriptor.width = imageWidth
 accumulantTextureDescriptor.height = imageHeight
@@ -167,11 +152,10 @@ let accumulantTexture = device.makeTexture(descriptor: accumulantTextureDescript
 
 commandEncoder.setComputePipelineState(combinePipeline)
 commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 0)
-commandEncoder.setBuffer(pixelDataBuffer, offset: 0, index: 1)
-commandEncoder.setTexture(accumulantTexture, index: 1)
-commandEncoder.setBytes(&imageWidth, length: MemoryLayout<Int>.stride, index: 2)
-commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 3)
-commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 4)
+commandEncoder.setTexture(accumulantTexture, index: 0)
+commandEncoder.setBytes(&imageWidth, length: MemoryLayout<Int>.stride, index: 1)
+commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 2)
+commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 3)
 
 // We have to calculate the sum `pixelCount` times
 // => amount of threadgroups is `resultsCount` / `threadExecutionWidth` (rounded up)
@@ -186,12 +170,12 @@ commandEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: 
 
 commandEncoder.endEncoding()
 
-
 if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
-  print("Command encoder")
   blitEncoder.synchronize(resource: accumulantTexture!)
   blitEncoder.endEncoding()
 }
+
+let denoise = 
 
 commandBuffer.commit()
 commandBuffer.waitUntilCompleted()
@@ -205,21 +189,4 @@ if let error = commandBuffer.error as NSError? {
   }
 }
 
-if let accumulatedImage = makeImage(for: accumulantTexture!), let imageDestination = CGImageDestinationCreateWithURL(NSURL.fileURL(withPath: "/Users/pprovins/Desktop/render.png") as CFURL, kUTTypePNG, 1, nil) {
-  CGImageDestinationAddImage(imageDestination, accumulatedImage, nil)
-  CGImageDestinationFinalize(imageDestination)
-  print("sicc")
-}
-
-/*
-let sfw = SimpleFileWriter(filePath: "/Users/pprovins/Desktop/render.ppm")
-sfw.write(content: "P3\n")
-sfw.write(content: "\(imageWidth) \(imageHeight)\n")
-sfw.write(content: "255\n")
-
-for pixel in pixelDataMirrorBuffer {
-  sfw.write(content: "\(UInt8(pixel.x * 255)) \(UInt8(pixel.y * 255)) \(UInt8(pixel.z * 255)) ")
-}
-
-sfw.write(content: "\n")
-*/
+saveImage(for: accumulantTexture!, where: "/Users/pprovins/Desktop/render.png")
