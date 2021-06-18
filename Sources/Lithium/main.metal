@@ -287,6 +287,7 @@ kernel void ray_trace(device float3 *origins [[ buffer(0) ]],
 
 kernel void combine_results(device float3 *intermediateResults [[ buffer(0) ]],
                             device float4 *results [[ buffer(1) ]],
+                            texture2d <float, access::write> resultingImage [[ texture(0) ]],
                             const device uint &imageWidth [[ buffer(2) ]],
                             const device uint &imageHeight [[ buffer(3) ]],
                             const device uint &samplesPerPixel [[ buffer(4) ]],
@@ -295,10 +296,15 @@ kernel void combine_results(device float3 *intermediateResults [[ buffer(0) ]],
     return;
   }
   
+  const uint row = index / imageWidth;
+  const uint col = index % imageWidth;
+  const uint2 gid = uint2(col, row);
+  
   auto accumulatedColor = float3(0.0);
   for (uint i = 0; i < samplesPerPixel; ++i) {
     accumulatedColor += intermediateResults[(index * samplesPerPixel) + i];
   }
   
   results[index] = float4(sqrt(accumulatedColor), 1.0);
+  resultingImage.write(float4(sqrt(accumulatedColor), 1.0), gid);
 }

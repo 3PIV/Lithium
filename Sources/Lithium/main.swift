@@ -28,6 +28,38 @@ struct SimpleFileWriter {
   }
 }
 
+func makeImage(for texture: MTLTexture) -> CGImage? {
+  assert(texture.pixelFormat == .rgba8Unorm)
+  
+  let width = texture.width
+  let height = texture.height
+  let pixelByteCount = 4 * MemoryLayout<UInt8>.size
+  let imageBytesPerRow = width * pixelByteCount
+  let imageByteCount = imageBytesPerRow * height
+  let imageBytes = UnsafeMutableRawPointer.allocate(byteCount: imageByteCount, alignment: pixelByteCount)
+  defer {
+    imageBytes.deallocate()
+  }
+  
+  texture.getBytes(imageBytes,
+                   bytesPerRow: imageBytesPerRow,
+                   from: MTLRegionMake2D(0, 0, width, height),
+                   mipmapLevel: 0)
+    
+  guard let colorSpace = CGColorSpace(name: CGColorSpace.linearSRGB) else { return nil }
+  let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+  guard let bitmapContext = CGContext(data: nil,
+                                      width: width,
+                                      height: height,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: imageBytesPerRow,
+                                      space: colorSpace,
+                                      bitmapInfo: bitmapInfo) else { return nil }
+  bitmapContext.data?.copyMemory(from: imageBytes, byteCount: imageByteCount)
+  let image = bitmapContext.makeImage()
+  return image
+}
+
 var imageWidth = 960
 var imageHeight = 540
 var pixelCount = UInt(imageWidth * imageHeight)
@@ -63,19 +95,10 @@ let commandEncoder = commandBuffer.makeComputeCommandEncoder()!
  Setup the ray directions. For pixel, there are sampleCount samples.
  Each sample will have a slightly different direction.
  */
-var originData: [Float3] = (0..<(Int(pixelCount) * sampleCount)).map{ _ in Float3(0, 0, 0)}
-var originCount = UInt(originData.count)
+let samplesByPixelsCount = Int(pixelCount) * sampleCount
 
-let originDataBuffer = device.makeBuffer(bytes: &originData, length: Int(originCount) * MemoryLayout<Float3>.stride, options: [])!
-let originDataMirrorPointer = originDataBuffer.contents().bindMemory(to: Float3.self, capacity: Int(originCount))
-let originDataMirrorBuffer = UnsafeBufferPointer(start: originDataMirrorPointer, count: Int(originCount))
-
-var directionData: [Float3] = (0..<(Int(pixelCount) * sampleCount)).map{ _ in Float3(0, 0, 0)}
-var directionCount = UInt(directionData.count)
-
-let directionDataBuffer = device.makeBuffer(bytes: &directionData, length: Int(directionCount) * MemoryLayout<Float3>.stride, options: [])!
-let directionDataMirrorPointer = directionDataBuffer.contents().bindMemory(to: Float3.self, capacity: Int(directionCount))
-let directionDataMirrorBuffer = UnsafeBufferPointer(start: directionDataMirrorPointer, count: Int(directionCount))
+let originDataBuffer = device.makeBuffer(length: samplesByPixelsCount * MemoryLayout<Float3>.stride, options: [.storageModePrivate])!
+let directionDataBuffer = device.makeBuffer(length: samplesByPixelsCount * MemoryLayout<Float3>.stride, options: [.storageModePrivate])!
 
 commandEncoder.setComputePipelineState(spawnPipeline)
 commandEncoder.setBytes(&cameraOrigin, length: MemoryLayout<Float3>.stride, index: 0)
@@ -113,7 +136,7 @@ commandEncoder.setBytes(&bounceCount, length: MemoryLayout<Int>.stride, index: 5
 // => amount of threadgroups is `resultsCount` / `threadExecutionWidth` (rounded up)
 // because each threadgroup will process `threadExecutionWidth` threads
 threadExecutionWidth = tracePipeline.maxTotalThreadsPerThreadgroup
-threadgroupsPerGrid = MTLSize(width: (Int(directionCount) + threadExecutionWidth - 1) / threadExecutionWidth, height: 1, depth: 1)
+threadgroupsPerGrid = MTLSize(width: (Int(samplesByPixelsCount) + threadExecutionWidth - 1) / threadExecutionWidth, height: 1, depth: 1)
 // Here we set that each threadgroup should process `threadExecutionWidth` threads
 // the only important thing for performance is that this number is a multiple of
 // `threadExecutionWidth` (here 1 times)
@@ -125,6 +148,19 @@ var pixelData: [Float4] = (0..<pixelCount).map{ _ in Float4(0, 0, 0, 0)}
 let pixelDataBuffer = device.makeBuffer(bytes: &pixelData, length: Int(pixelCount) * MemoryLayout<Float4>.stride, options: [])!
 let pixelDataMirrorPointer = pixelDataBuffer.contents().bindMemory(to: Float4.self, capacity: Int(pixelCount))
 let pixelDataMirrorBuffer = UnsafeBufferPointer(start: pixelDataMirrorPointer, count: Int(pixelCount))
+
+let accumulantTextureDescriptor = MTLTextureDescriptor()
+accumulantTextureDescriptor.width = imageWidth
+accumulantTextureDescriptor.height = imageHeight
+accumulantTextureDescriptor.depth = 1
+accumulantTextureDescriptor.usage = .shaderWrite
+accumulantTextureDescriptor.mipmapLevelCount = 1
+accumulantTextureDescriptor.allowGPUOptimizedContents = false
+accumulantTextureDescriptor.pixelFormat = .rgba8Unorm
+accumulantTextureDescriptor.storageMode = .managed
+accumulantTextureDescriptor.cpuCacheMode = .defaultCache
+accumulantTextureDescriptor.resourceOptions = .storageModeManaged
+let accumulantTexture = device.makeTexture(descriptor: accumulantTextureDescriptor)
 /*
  End Pixel Color Buffer Setup
  */
@@ -132,6 +168,7 @@ let pixelDataMirrorBuffer = UnsafeBufferPointer(start: pixelDataMirrorPointer, c
 commandEncoder.setComputePipelineState(combinePipeline)
 commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 0)
 commandEncoder.setBuffer(pixelDataBuffer, offset: 0, index: 1)
+commandEncoder.setTexture(accumulantTexture, index: 1)
 commandEncoder.setBytes(&imageWidth, length: MemoryLayout<Int>.stride, index: 2)
 commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 3)
 commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 4)
@@ -148,8 +185,17 @@ threadsPerThreadgroup = MTLSize(width: threadExecutionWidth, height: 1, depth: 1
 commandEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
 
 commandEncoder.endEncoding()
+
+
+if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
+  print("Command encoder")
+  blitEncoder.synchronize(resource: accumulantTexture!)
+  blitEncoder.endEncoding()
+}
+
 commandBuffer.commit()
 commandBuffer.waitUntilCompleted()
+
 
 if let error = commandBuffer.error as NSError? {
   if let encoderInfo = error.userInfo[MTLCommandBufferEncoderInfoErrorKey] as? [MTLCommandBufferEncoderInfo] {
@@ -159,6 +205,13 @@ if let error = commandBuffer.error as NSError? {
   }
 }
 
+if let accumulatedImage = makeImage(for: accumulantTexture!), let imageDestination = CGImageDestinationCreateWithURL(NSURL.fileURL(withPath: "/Users/pprovins/Desktop/render.png") as CFURL, kUTTypePNG, 1, nil) {
+  CGImageDestinationAddImage(imageDestination, accumulatedImage, nil)
+  CGImageDestinationFinalize(imageDestination)
+  print("sicc")
+}
+
+/*
 let sfw = SimpleFileWriter(filePath: "/Users/pprovins/Desktop/render.ppm")
 sfw.write(content: "P3\n")
 sfw.write(content: "\(imageWidth) \(imageHeight)\n")
@@ -169,3 +222,4 @@ for pixel in pixelDataMirrorBuffer {
 }
 
 sfw.write(content: "\n")
+*/
