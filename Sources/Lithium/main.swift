@@ -1,4 +1,5 @@
 import Metal
+import MetalPerformanceShaders
 import Foundation
 import simd
 
@@ -6,54 +7,54 @@ typealias Float4 = SIMD4<Float>
 typealias Float3 = SIMD3<Float>
 
 func makeImage(for texture: MTLTexture) -> CGImage? {
-  assert(texture.pixelFormat == .rgba8Unorm)
-  
-  let width = texture.width
-  let height = texture.height
-  let pixelByteCount = 4 * MemoryLayout<UInt8>.size
-  let imageBytesPerRow = width * pixelByteCount
-  let imageByteCount = imageBytesPerRow * height
-  let imageBytes = UnsafeMutableRawPointer.allocate(byteCount: imageByteCount, alignment: pixelByteCount)
-  defer {
-    imageBytes.deallocate()
-  }
-  
-  texture.getBytes(imageBytes,
-                   bytesPerRow: imageBytesPerRow,
-                   from: MTLRegionMake2D(0, 0, width, height),
-                   mipmapLevel: 0)
-    
-  guard let colorSpace = CGColorSpace(name: CGColorSpace.linearSRGB) else { return nil }
-  let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-  guard let bitmapContext = CGContext(data: nil,
-                                      width: width,
-                                      height: height,
-                                      bitsPerComponent: 8,
-                                      bytesPerRow: imageBytesPerRow,
-                                      space: colorSpace,
-                                      bitmapInfo: bitmapInfo) else { return nil }
-  bitmapContext.data?.copyMemory(from: imageBytes, byteCount: imageByteCount)
-  let image = bitmapContext.makeImage()
-  return image
+	assert(texture.pixelFormat == .rgba8Unorm)
+	
+	let width = texture.width
+	let height = texture.height
+	let pixelByteCount = 4 * MemoryLayout<UInt8>.size
+	let imageBytesPerRow = width * pixelByteCount
+	let imageByteCount = imageBytesPerRow * height
+	let imageBytes = UnsafeMutableRawPointer.allocate(byteCount: imageByteCount, alignment: pixelByteCount)
+	defer {
+		imageBytes.deallocate()
+	}
+	
+	texture.getBytes(imageBytes,
+									 bytesPerRow: imageBytesPerRow,
+									 from: MTLRegionMake2D(0, 0, width, height),
+									 mipmapLevel: 0)
+	
+	guard let colorSpace = CGColorSpace(name: CGColorSpace.linearSRGB) else { return nil }
+	let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+	guard let bitmapContext = CGContext(data: nil,
+																			width: width,
+																			height: height,
+																			bitsPerComponent: 8,
+																			bytesPerRow: imageBytesPerRow,
+																			space: colorSpace,
+																			bitmapInfo: bitmapInfo) else { return nil }
+	bitmapContext.data?.copyMemory(from: imageBytes, byteCount: imageByteCount)
+	let image = bitmapContext.makeImage()
+	return image
 }
 
 func saveImage(for texture: MTLTexture, where location: String) {
-  guard let accumulatedImage = makeImage(for: texture) else {
-    fatalError("Could not create an image from the specified texture.")
-  }
-  
-  guard let imageDestination = CGImageDestinationCreateWithURL(NSURL.fileURL(withPath: location) as CFURL, kUTTypePNG, 1, nil) else {
-    fatalError("Could not save the image to the provided location: \(location).")
-  }
-  
-  CGImageDestinationAddImage(imageDestination, accumulatedImage, nil)
-  CGImageDestinationFinalize(imageDestination)
+	guard let accumulatedImage = makeImage(for: texture) else {
+		fatalError("Could not create an image from the specified texture.")
+	}
+	
+	guard let imageDestination = CGImageDestinationCreateWithURL(NSURL.fileURL(withPath: location) as CFURL, kUTTypePNG, 1, nil) else {
+		fatalError("Could not save the image to the provided location: \(location).")
+	}
+	
+	CGImageDestinationAddImage(imageDestination, accumulatedImage, nil)
+	CGImageDestinationFinalize(imageDestination)
 }
 
 var imageWidth = 960
 var imageHeight = 540
 var pixelCount = UInt(imageWidth * imageHeight)
-var sampleCount = 75
+var sampleCount = 150
 var bounceCount = 30
 var cameraOrigin = Float3(-1.0, -0.25, 2.0)
 var cameraTarget = Float3(-0.1, 0, -1.0)
@@ -82,9 +83,9 @@ let commandEncoder = commandBuffer.makeComputeCommandEncoder()!
 // MARK: Ray Direction Creation
 
 /*
- Setup the ray directions. For pixel, there are sampleCount samples.
- Each sample will have a slightly different direction.
- */
+Setup the ray directions. For pixel, there are sampleCount samples.
+Each sample will have a slightly different direction.
+*/
 let samplesByPixelsCount = Int(pixelCount) * sampleCount
 
 let originDataBuffer = device.makeBuffer(length: samplesByPixelsCount * MemoryLayout<Float3>.stride, options: [.storageModePrivate])!
@@ -146,9 +147,10 @@ accumulantTextureDescriptor.storageMode = .managed
 accumulantTextureDescriptor.cpuCacheMode = .defaultCache
 accumulantTextureDescriptor.resourceOptions = .storageModeManaged
 let accumulantTexture = device.makeTexture(descriptor: accumulantTextureDescriptor)
+
 /*
- End Pixel Color Buffer Setup
- */
+End Pixel Color Buffer Setup
+*/
 
 commandEncoder.setComputePipelineState(combinePipeline)
 commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 0)
@@ -167,26 +169,18 @@ threadgroupsPerGrid = MTLSize(width: (Int(pixelCount) + threadExecutionWidth - 1
 // `threadExecutionWidth` (here 1 times)
 threadsPerThreadgroup = MTLSize(width: threadExecutionWidth, height: 1, depth: 1)
 commandEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
-
 commandEncoder.endEncoding()
-
-if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
-  blitEncoder.synchronize(resource: accumulantTexture!)
-  blitEncoder.endEncoding()
-}
-
-let denoise = 
 
 commandBuffer.commit()
 commandBuffer.waitUntilCompleted()
 
 
 if let error = commandBuffer.error as NSError? {
-  if let encoderInfo = error.userInfo[MTLCommandBufferEncoderInfoErrorKey] as? [MTLCommandBufferEncoderInfo] {
-    for info in encoderInfo {
-      print(info.label + info.debugSignposts.joined())
-    }
-  }
+	if let encoderInfo = error.userInfo[MTLCommandBufferEncoderInfoErrorKey] as? [MTLCommandBufferEncoderInfo] {
+		for info in encoderInfo {
+			print(info.label + info.debugSignposts.joined())
+		}
+	}
 }
 
 saveImage(for: accumulantTexture!, where: "/Users/pprovins/Desktop/render.png")

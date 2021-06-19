@@ -65,7 +65,7 @@ float sceneDistance(const float3 p) {
   return sdfUnion(s7d, sdfUnion(s6d, sdfUnion(s5d, sdfUnion(sdfUnion(glob, gd), sdfSmoothSubtraction(t3d, s3d, 0.1)))));
 }
 
-inline float3 random_f3_in_unit_sphere(thread float &seed) {
+inline float3 randomF3InUnitSphere(thread float &seed) {
   const float x = rand(seed) * 2.0 - 1.0;
   const float y = rand(seed) * 2.0 - 1.0;
   const float z = rand(seed) * 2.0 - 1.0;
@@ -73,30 +73,30 @@ inline float3 random_f3_in_unit_sphere(thread float &seed) {
   return normalize(p);
 }
 
-float shlickApprox(float cosine, float dr) {
-  auto r0 = (1.0 - dr) / (1.0 + dr);
+float shlickApprox(float cosine, float refractionAmount) {
+  auto r0 = (1.0 - refractionAmount) / (1.0 + refractionAmount);
   r0 *= r0;
   return r0 + (1.0 - r0) * pow((1.0 - cosine), 5.0);
 }
 
 float3 scatter(thread const Material &m, thread const float3 &d, thread const float3 &n, thread float &s) {
-  float3 rd = reflect(d, n);
-  float3 direction = m.r > 0.0 ? rd : n;
+  float3 reflectedDirection = reflect(d, n);
+  float3 direction = m.r > 0.0 ? reflectedDirection : n;
   
-  bool ff = dot(d, n) < 0.0;
-  float  dr = ff ? 1.0 / m.ir : m.ir;
-  float3 nd = ff ? normalize(n) : -normalize(n);
-  float3 ud = normalize(d);
-  float cos_theta = fmin(dot(-ud, nd), 1.0);
-  float sin_theta = sqrt(1.0 - pow(cos_theta, 2));
-  bool will_reflect = shlickApprox(cos_theta, dr) > rand(s);
-  bool can_refract = !(dr * sin_theta > 1.0);
-  float3 rfct = can_refract && !will_reflect ? refract(ud, nd, dr) : rd;
+  bool isFrontFacing = dot(d, n) < 0.0;
+  float  refractionAmount = isFrontFacing ? 1.0 / m.ir : m.ir;
+  float3 ffCorrectedNormal = isFrontFacing ? normalize(n) : -normalize(n);
+  float3 unitDirection = normalize(d);
+  float cosTheta = fmin(dot(-unitDirection, ffCorrectedNormal), 1.0);
+  float sinTheta = sqrt(1.0 - pow(cosTheta, 2));
+  bool isReflecting = shlickApprox(cosTheta, refractionAmount) > rand(s);
+  bool canRefact = !(refractionAmount * sinTheta > 1.0);
+  float3 refractionDirection = canRefact && !isReflecting ? refract(unitDirection, ffCorrectedNormal, refractionAmount) : reflectedDirection;
   
-  float3 sd = m.ir > 0.0 ? rfct : direction;
-  sd += m.f * random_f3_in_unit_sphere(s);
-  length(sd) < 0.005 ? sd = nd : sd = sd;
-  return normalize(sd);
+  float3 scatterDirection = m.ir > 0.0 ? refractionDirection : direction;
+  scatterDirection += m.f * randomF3InUnitSphere(s);
+  length(scatterDirection) < 0.005 ? scatterDirection = ffCorrectedNormal : scatterDirection = scatterDirection;
+  return normalize(scatterDirection);
 }
 
 Material sceneMaterial(const float3 p){
@@ -168,25 +168,25 @@ Material sceneMaterial(const float3 p){
 }
 
 void testForHit(float (*sdfFunc)(const float3), thread const Ray& r, thread HitRecord& hr) {
-  float d = 0.0;
-  float t = 0.0;
+  float sdfDistance = 0.0;
+  float rayLength = 0.0;
   hr.h = false;
   for (int i = 0; i < 1000; ++i) {
-    d = sdfFunc(r.o + r.d * t);
+    sdfDistance = sdfFunc(r.o + r.d * rayLength);
     
-    if (abs(d) < 0.0001 * (1.0 + t)) {
+    if (abs(sdfDistance) < 0.0001 * (1.0 + rayLength)) {
       hr.h = true;
-      hr.p = r.o + r.d * t;
-      hr.n = sdfNormalEstimate(sdfFunc, r.o + r.d * t, r.d);
+      hr.p = r.o + r.d * rayLength;
+      hr.n = sdfNormalEstimate(sdfFunc, r.o + r.d * rayLength, r.d);
       hr.m = sceneMaterial(hr.p);
       return;
     }
-    t += abs(d) * 0.75;
-    if (t > 1000.0) return;
+    rayLength += abs(sdfDistance) * 0.75;
+    if (rayLength > 1000.0) return;
   }
 }
 
-float3 default_atmosphere_color(const thread Ray &r) {
+float3 defaultAtmosphereColor(const thread Ray &r) {
   float3 white = float3(1.0, 1.0, 1.0);
   float3 atmos = float3(0.5, 0.7, 1.0);
   return mix(white, atmos, 0.5 * saturate(r.d.y) + 1.0);
@@ -216,31 +216,31 @@ kernel void spawn_rays(const device float3 &origin [[ buffer(0) ]],
   
   //const float3 origin = float3(0.0);
   const float aspect = float(imageWidth) / float(imageHeight);
-  const float vph = 2.0 * desiredHeight;
-  const float vpw = aspect * vph;
+  const float viewportHeight = 2.0 * desiredHeight;
+  const float viewportWidth = aspect * viewportHeight;
   
-  const auto cw = normalize(origin - target);
-  const auto cu = normalize(cross(float3(0.0, 1.0, 0.0), cw));
-  const auto cv = cross(cw, cu);
+  const auto cameraW = normalize(origin - target);
+  const auto cameraU = normalize(cross(float3(0.0, 1.0, 0.0), cameraW));
+  const auto cameraV = cross(cameraW, cameraU);
   
-  const float3 horizontal = focusDistance * vpw * cu;
-  const float3 vertical = focusDistance * vph * cv;
+  const float3 horizontal = focusDistance * viewportWidth * cameraU;
+  const float3 vertical = focusDistance * viewportHeight * cameraV;
   
-  const float3 llc = origin - horizontal / 2.0 - vertical / 2.0 - focusDistance * cw;
+  const float3 llc = origin - horizontal / 2.0 - vertical / 2.0 - focusDistance * cameraW;
   
   const float lensRadius = apertureRadius / 2.0;
   
   float seed = getSeed(index, col, row);
   
   for (uint i = 0; i < samplesPerPixel; ++i) {
-    const float2 rd = (fmod(normalize(random_f3_in_unit_sphere(seed).xy), lensRadius) - 0.5 * lensRadius) * 2.0;
-    const float3 amt = lensRadius * float3(rd, 0.0);
-    const float3 offset = cu * amt.x + cv * amt.y;
+    const float2 randomDisk = (fmod(normalize(randomF3InUnitSphere(seed).xy), lensRadius) - 0.5 * lensRadius) * 2.0;
+    const float3 randomDiskAmount = lensRadius * float3(randomDisk, 0.0);
+    const float3 offset = cameraU * randomDiskAmount.x + cameraV * randomDiskAmount.y;
     
-    const float ranX = fract(rand(seed));
-    const float ranY = fract(rand(seed));
-    const float u = (float(col) + ranX) / float(imageWidth - 1);
-    const float v = 1.0 - (float(row) + ranY) / float(imageHeight - 1);
+    const float randomXOffset = rand(seed);
+    const float randomYOffset = rand(seed);
+    const float u = (float(col) + randomXOffset) / float(imageWidth - 1);
+    const float v = 1.0 - (float(row) + randomYOffset) / float(imageHeight - 1);
     rayOriginBuffer[(index * samplesPerPixel) + i] = origin + offset;
     rayDirectionBuffer[(index * samplesPerPixel) + i] = normalize(llc + u * horizontal + v * vertical - origin - offset);
   }
@@ -258,8 +258,8 @@ kernel void ray_trace(device float3 *origins [[ buffer(0) ]],
   if (index >= imageWidth * imageHeight * samplesPerPixel) {
     return;
   }
-  const uint pixelIndex = index / 16;
-  
+  const uint pixelIndex = index / samplesPerPixel;
+
   float3 rayDirection = directions[index];
   float3 rayOrigin = origins[index];
   
@@ -272,12 +272,13 @@ kernel void ray_trace(device float3 *origins [[ buffer(0) ]],
   
   for (uint bounceIndex = 0; bounceIndex < rayBounces; ++bounceIndex) {
     testForHit(sceneDistance, r, hr);
+		
     if (hr.h) {
       float3 target = scatter(hr.m, r.d, hr.n, seed);
       attenuation *= hr.m.a;
       r = Ray(hr.p + target * 0.001, target);
     } else {
-      color = default_atmosphere_color(r) * attenuation;
+      color = defaultAtmosphereColor(r) * attenuation;
       break;
     }
   }
