@@ -6,6 +6,9 @@ import simd
 typealias Float4 = SIMD4<Float>
 typealias Float3 = SIMD3<Float>
 
+/// Converts a MTLTexture into a CGImage representation
+/// - Parameter texture: The MTLTexture to convert into a PNG format CGImage
+/// - Returns: Nil on failure or a CGImage that is in PNG format
 func makeImage(for texture: MTLTexture) -> CGImage? {
 	assert(texture.pixelFormat == .rgba8Unorm)
 	
@@ -38,6 +41,10 @@ func makeImage(for texture: MTLTexture) -> CGImage? {
 	return image
 }
 
+/// Saves a MTLTexture as a PNG format image to a specified location
+/// - Parameters:
+///   - texture: the MTLTexture to save
+///   - location: the absolute path where the image shall be saved
 func saveImage(for texture: MTLTexture, where location: String) {
 	guard let accumulatedImage = makeImage(for: texture) else {
 		fatalError("Could not create an image from the specified texture.")
@@ -51,6 +58,20 @@ func saveImage(for texture: MTLTexture, where location: String) {
 	CGImageDestinationFinalize(imageDestination)
 }
 
+/// Given a compute pipeline and number of desired elements, return the most threads and threads per grid the kernel can be dispatched with
+/// - Parameters:
+///   - pipeline: The compute pipeline which will be dispatched
+///   - count: The number of elements that can be operated on in parallel and independent of each other
+/// - Returns: (MTLSize, MTLSize) -> (threadGroupsPerGrid, threadsPerThreadgroup)
+func getOptimalThreadgroupSize(pipeline: MTLComputePipelineState, count: Int) -> (MTLSize, MTLSize) {
+	let threadExecutionWidth = pipeline.maxTotalThreadsPerThreadgroup
+	let threadgroupsPerGrid = MTLSize(width: (count + threadExecutionWidth - 1) / threadExecutionWidth, height: 1, depth: 1)
+	let threadsPerThreadgroup = MTLSize(width: threadExecutionWidth, height: 1, depth: 1)
+	
+	return (threadgroupsPerGrid, threadsPerThreadgroup)
+}
+
+// MARK: Global Variables for Rendering
 var imageWidth = 960
 var imageHeight = 540
 var pixelCount = UInt(imageWidth * imageHeight)
@@ -80,11 +101,11 @@ commandBufferDescriptor.errorOptions = MTLCommandBufferErrorOption.encoderExecut
 let commandBuffer = commandQueue.makeCommandBuffer(descriptor: commandBufferDescriptor)!
 let commandEncoder = commandBuffer.makeComputeCommandEncoder()!
 
-// MARK: Ray Direction Creation
-
-/*
-Setup the ray directions. For pixel, there are sampleCount samples.
-Each sample will have a slightly different direction.
+// MARK: Ray Spawning
+/**
+For each pixel, create an xyz origin and xyz direction.
+Each pixel will have multiple samples, each buffer will hold samples * pixelCount float3 to accomodate for this.
+The direction data buffer will also be reused to hold the pixel color for that sample so that another buffer does not need to be created.
 */
 let samplesByPixelsCount = Int(pixelCount) * sampleCount
 
@@ -103,17 +124,10 @@ commandEncoder.setBytes(&imageWidth, length: MemoryLayout<Int>.stride, index: 7)
 commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 8)
 commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 9)
 
-// We have to calculate the sum `pixelCount` times
-// => amount of threadgroups is `resultsCount` / `threadExecutionWidth` (rounded up)
-// because each threadgroup will process `threadExecutionWidth` threads
-var threadExecutionWidth = spawnPipeline.maxTotalThreadsPerThreadgroup
-var threadgroupsPerGrid = MTLSize(width: (Int(pixelCount) + threadExecutionWidth - 1) / threadExecutionWidth, height: 1, depth: 1)
-// Here we set that each threadgroup should process `threadExecutionWidth` threads
-// the only important thing for performance is that this number is a multiple of
-// `threadExecutionWidth` (here 1 times)
-var threadsPerThreadgroup = MTLSize(width: threadExecutionWidth, height: 1, depth: 1)
+var (threadgroupsPerGrid, threadsPerThreadgroup) = getOptimalThreadgroupSize(pipeline: spawnPipeline, count: Int(pixelCount))
 commandEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
 
+// MARK: Ray Tracing Compute Launch
 commandEncoder.setComputePipelineState(tracePipeline)
 commandEncoder.setBuffer(originDataBuffer, offset: 0, index: 0)
 commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 1)
@@ -122,35 +136,22 @@ commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 3
 commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 4)
 commandEncoder.setBytes(&bounceCount, length: MemoryLayout<Int>.stride, index: 5)
 
-
-// We have to calculate the sum `pixelCount` times
-// => amount of threadgroups is `resultsCount` / `threadExecutionWidth` (rounded up)
-// because each threadgroup will process `threadExecutionWidth` threads
-threadExecutionWidth = tracePipeline.maxTotalThreadsPerThreadgroup
-threadgroupsPerGrid = MTLSize(width: (Int(samplesByPixelsCount) + threadExecutionWidth - 1) / threadExecutionWidth, height: 1, depth: 1)
-// Here we set that each threadgroup should process `threadExecutionWidth` threads
-// the only important thing for performance is that this number is a multiple of
-// `threadExecutionWidth` (here 1 times)
-threadsPerThreadgroup = MTLSize(width: threadExecutionWidth, height: 1, depth: 1)
+(threadgroupsPerGrid, threadsPerThreadgroup) = getOptimalThreadgroupSize(pipeline: tracePipeline, count: Int(samplesByPixelsCount))
 commandEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
 
-// MARK: Pixel Color Buffer Setup Begin
+// MARK: Accumulation Into Final Texture
 let accumulantTextureDescriptor = MTLTextureDescriptor()
 accumulantTextureDescriptor.width = imageWidth
 accumulantTextureDescriptor.height = imageHeight
 accumulantTextureDescriptor.depth = 1
 accumulantTextureDescriptor.usage = .shaderWrite
 accumulantTextureDescriptor.mipmapLevelCount = 1
-accumulantTextureDescriptor.allowGPUOptimizedContents = false
+accumulantTextureDescriptor.allowGPUOptimizedContents = true
 accumulantTextureDescriptor.pixelFormat = .rgba8Unorm
 accumulantTextureDescriptor.storageMode = .managed
 accumulantTextureDescriptor.cpuCacheMode = .defaultCache
 accumulantTextureDescriptor.resourceOptions = .storageModeManaged
 let accumulantTexture = device.makeTexture(descriptor: accumulantTextureDescriptor)
-
-/*
-End Pixel Color Buffer Setup
-*/
 
 commandEncoder.setComputePipelineState(combinePipeline)
 commandEncoder.setBuffer(directionDataBuffer, offset: 0, index: 0)
@@ -159,15 +160,7 @@ commandEncoder.setBytes(&imageWidth, length: MemoryLayout<Int>.stride, index: 1)
 commandEncoder.setBytes(&imageHeight, length: MemoryLayout<Int>.stride, index: 2)
 commandEncoder.setBytes(&sampleCount, length: MemoryLayout<Int>.stride, index: 3)
 
-// We have to calculate the sum `pixelCount` times
-// => amount of threadgroups is `resultsCount` / `threadExecutionWidth` (rounded up)
-// because each threadgroup will process `threadExecutionWidth` threads
-threadExecutionWidth = combinePipeline.maxTotalThreadsPerThreadgroup
-threadgroupsPerGrid = MTLSize(width: (Int(pixelCount) + threadExecutionWidth - 1) / threadExecutionWidth, height: 1, depth: 1)
-// Here we set that each threadgroup should process `threadExecutionWidth` threads
-// the only important thing for performance is that this number is a multiple of
-// `threadExecutionWidth` (here 1 times)
-threadsPerThreadgroup = MTLSize(width: threadExecutionWidth, height: 1, depth: 1)
+(threadgroupsPerGrid, threadsPerThreadgroup) = getOptimalThreadgroupSize(pipeline: combinePipeline, count: Int(pixelCount))
 commandEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
 commandEncoder.endEncoding()
 

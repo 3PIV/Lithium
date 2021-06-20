@@ -26,6 +26,7 @@ float3 SdfSphere::normal(const thread float3 &h) {
   return normalize(h - o);
 }
 
+// MARK: Box Definitions
 SdfBox::SdfBox(const thread float3 &center, const thread float3 &bounds): c(center), b(bounds) {};
   
 float SdfBox::distance(const float3 p) {
@@ -33,6 +34,7 @@ float SdfBox::distance(const float3 p) {
   return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
 }
 
+// MARK: Torus Definitions
 SdfTorus::SdfTorus(const thread float3 &center, const thread float2 &dimensions): c(center), d(dimensions) {};
   
 float SdfTorus::distance(const float3 p) {
