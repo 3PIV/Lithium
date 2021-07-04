@@ -176,4 +176,6 @@ if let error = commandBuffer.error as NSError? {
 	}
 }
 
-saveImage(for: accumulantTexture!, where: "/Users/pprovins/Desktop/render.png")
+let homeDirectory = NSHomeDirectory()
+let saveLocation = homeDirectory  + "/Desktop/render.png"
+saveImage(for: accumulantTexture!, where: saveLocation)
