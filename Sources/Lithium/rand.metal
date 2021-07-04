@@ -2,6 +2,9 @@
 
 using namespace metal;
 
+// This is a non object oriented version of Loki. If this interests you, check it out here!
+// https://github.com/Joe-Victor/Loki
+
 unsigned tausStep(const unsigned z, const int s1, const int s2, const int s3, const unsigned M) {
     unsigned b=(((z << s1) ^ z) >> s2);
     return (((z & M) << s3) ^ b);
