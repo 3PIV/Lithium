@@ -1,3 +1,4 @@
+import ImageIO
 import Metal
 import MetalPerformanceShaders
 import Foundation
